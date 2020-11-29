@@ -4,29 +4,32 @@ set -eu
 
 PATH="$(dirname "$(readlink -e "$0")"):$PATH"
 
+while getopts "c:" opt; do
+    case $opt in
+        c )
+            # each OPTARG for "c" is expected to be a valid string of find checks
+            candidate_checks="${candidate_checks+$candidate_checks} $OPTARG";;
+	esac
+done
+shift $(expr $OPTIND - 1 )
+
+if [[ -v candidate_checks ]]; then
+    declare -r CANDIDATE_CHECKS=$candidate_checks
+else 
+    echo "[ERROR] No candidate checks given" >&2
+    exit 1
+fi
+
 declare -r SOURCE_DIRECTORY="$(readlink -e "${1:-}")"
 if [[ -z $SOURCE_DIRECTORY ]]; then
-    echo "No source directory ${1:-}" >&2
+    echo "[ERROR] No source directory ${1:-}" >&2
     exit 1 
 fi
 declare -r TARGET=${2:-}
 if ! [[ $TARGET =~ s3://[a-zA-Z0-9\./] ]]; then
-    echo "Target $TARGET is no valid s3 url" >&2
+    echo "[ERROR] Target $TARGET is no valid s3 url" >&2
     exit 1
 fi
-
-declare -r APPDATA_DIR=$(readlink -e "$HOME/.local/share/backup-scripts")
-if [[ -z $APPDATA_DIR ]]; then
-    echo "[INFO] App data directory $HOME/.local/share/backup-scripts does not exist, creating it" >&2
-    mkdir --parents "$HOME/.local/share/backup-scripts"
-fi
-
-declare -r INITIAL_SYNC_START_TSFILE=$(readlink -f "$APPDATA_DIR/initial_sync_start_ts")
-if ! [[ -e $INITIAL_SYNC_START_TSFILE ]]; then
-    echo "[INFO] Initial sync start timestamp file $INITIAL_SYNC_START_TSFILE does not exist, creating it" >&2
-    touch "$INITIAL_SYNC_START_TSFILE"
-fi
-
 
 declare -r SYNCED_LIST=$(mktemp)
 function cleanup() {
@@ -46,17 +49,23 @@ print_duration() {
     fi
 }
 
-
-# TODO allow callers to pass a list of allowed paths
-
 declare -r BATCH_SIZE=100
 
+# ensure that the last run timestamp is present (but we won't touch it. that is the concern of the sync script)
+declare -r LAST_RUN_TIMESTAMP=$(last_run_timestamp.sh)
+
 s3cmd -r ls "$TARGET" | sed -r 's|([0-9-]+ [0-9:]+)[[:space:]]+([0-9]+)[[:space:]]+'"$TARGET"'/(.+)|\3|' > "$SYNCED_LIST"
-declare -r CANDIDATES=$(find "$SOURCE_DIRECTORY" -type f -path '*/converted/*.jpg' ! -newer "$INITIAL_SYNC_START_TSFILE" -printf '%P\n' |\
+
+declare -r CANDIDATES=$(find "$SOURCE_DIRECTORY" -type f ${CANDIDATE_CHECKS+$CANDIDATE_CHECKS} \
+    ! -newer "$LAST_RUN_TIMESTAMP" -printf '%P\n' |\
     while read file; do
         grep -q "$file" "$SYNCED_LIST" || echo "$file"
-    done | sort -u | head -n "$BATCH_SIZE")
-candidates_count=$(wc -l <<<"$CANDIDATES")    
+    done | sort | head -n "$BATCH_SIZE")
+
+if [[ -z $CANDIDATES ]]; then
+    echo "[INFO] No candidates found for sync" >&2
+    exit
+fi    
 
 # about "--exclude" - to restrict to only the files we pass via "--files-from", we must first exclude all
 # about "--no-check-md5" - s3cmd will compare found files that are older than $INITIAL_SYNC_START_TSFILE with uploaded once
@@ -65,13 +74,18 @@ candidates_count=$(wc -l <<<"$CANDIDATES")
 #   from: https://stackoverflow.com/a/28188553/1295519
 declare -r S3CMD_OPTS="--no-check-md5 --acl-private --no-progress --skip-existing --preserve --exclude '*'"
 # about "\x27" in sed pattern - single quote
-sync_out=$(s3cmd $S3CMD_OPTS --files-from - sync "$SOURCE_DIRECTORY" "$TARGET" <<<"$CANDIDATES" 2>&1 |\
+synced_files=$(s3cmd $S3CMD_OPTS --files-from - sync "$SOURCE_DIRECTORY" "$TARGET" <<<"$CANDIDATES" 2>&1 |\
     sed -r -n 's/^upload: \x27(.+)\x27 -> \x27s3:.+\x27.*/\1/p')        
-synced_count=$(wc -l <<<"$sync_out")    
 
-if [[ $candidates_count != $synced_count ]]; then
+candidates_count=$(wc -l <<<"$CANDIDATES")
+synced_count=$(wc -l <<<"$synced_files")      
+
+if [[ -z $synced_files ]]; then
+    echo "[WARN] No files were synced (but there were candidates)" >&2
+    exit 1
+elif [[ $candidates_count != $synced_count ]]; then
     echo "[WARN] Found $candidates_count candidates but $synced_count were synced" >&2
 fi
 
-echo "$sync_out"
+echo "$synced_files"
 echo "[INFO] Synced $synced_count file(s) in $(print_duration)" >&2
