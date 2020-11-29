@@ -49,6 +49,7 @@ print_duration() {
     fi
 }
 
+# TODO make this an option parameter (and use no restriction if missing?)
 declare -r BATCH_SIZE=100
 
 # ensure that the last run timestamp is present (but we won't touch it. that is the concern of the sync script)
@@ -77,13 +78,15 @@ declare -r S3CMD_OPTS="--no-check-md5 --acl-private --no-progress --skip-existin
 synced_files=$(s3cmd $S3CMD_OPTS --files-from - sync "$SOURCE_DIRECTORY" "$TARGET" <<<"$CANDIDATES" 2>&1 |\
     sed -r -n 's/^upload: \x27(.+)\x27 -> \x27s3:.+\x27.*/\1/p')        
 
-candidates_count=$(wc -l <<<"$CANDIDATES")
-synced_count=$(wc -l <<<"$synced_files")      
-
 if [[ -z $synced_files ]]; then
     echo "[WARN] No files were synced (but there were candidates)" >&2
     exit 1
-elif [[ $candidates_count != $synced_count ]]; then
+fi
+
+candidates_count=$(wc -l <<<"$CANDIDATES")
+synced_count=$(wc -l <<<"$synced_files")      
+
+if [[ $candidates_count != $synced_count ]]; then
     echo "[WARN] Found $candidates_count candidates but $synced_count were synced" >&2
 fi
 
