@@ -26,7 +26,7 @@ done
 shift $(expr $OPTIND - 1 )
 
 if ! [[ -v MODE ]]; then
-    echo ="[ERROR] No mode given: one of -n or -o required" >&2
+    echo "[ERROR] No mode given: one of -n or -o required" >&2
     exit 1
 fi
 
@@ -43,8 +43,7 @@ if [[ -z $SOURCE_DIRECTORY ]]; then
     exit 1 
 fi
 declare -r TARGET=${2:-}
-if ! [[ $TARGET =~ s3://[a-zA-Z0-9\./] ]]; then
-    # FIXME balk on missing / at the end
+if ! [[ $TARGET =~ s3://[a-zA-Z0-9\./]/ ]]; then
     echo "[ERROR] Target $TARGET is no valid s3 url" >&2
     exit 1
 fi
@@ -90,7 +89,9 @@ get_last_run_ts_file()  {
     echo "$ts_file"
 }
 
-sync_files() {
+sync_files() (
+    # we want to be able to capture all output from s3cmd so we won't miss errors, so run in subshell with "e" option turned off
+    set +e
     local -r source_dir=$1
     local -r files_to_sync=$2
     local -r target_url=$3
@@ -100,9 +101,17 @@ sync_files() {
     #   and maybe wrongly detect "identical" files (identity based on md5 checksums). (this might also make things faster because 
     #   checksums must not be produced/fetched). From: https://stackoverflow.com/a/28188553/1295519
     local -r opts="--no-check-md5 --acl-private --no-progress --skip-existing --preserve --exclude '*'"
-    s3cmd $opts -v --files-from - sync "$source_dir" "$target_url" <<<"$files_to_sync" 2>&1  |\
-        sed -r -n 's/^upload: \x27(.+)\x27 -> \x27s3:.+\x27.*/\1/p'
-}
+    local s3cmd_out
+    s3cmd_out=$(s3cmd $opts --files-from - sync "$source_dir" "$target_url" <<<"$files_to_sync" 2>&1)
+    local -r s3cmd_rc=$?
+
+    if ! [[ $s3cmd_rc = 0 ]]; then
+        echo -e "[ERROR] s3cmd call failed with return code $s3cmd_rc:\n$s3cmd_out" >&2
+        exit 1
+    fi
+
+    sed -r -n 's/^upload: \x27(.+)\x27 -> \x27s3:.+\x27.*/\1/p' <<<"$s3cmd_out"
+)
 
 
 
