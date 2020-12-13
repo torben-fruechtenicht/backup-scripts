@@ -4,7 +4,7 @@ set -eu
 
 PATH="$(dirname "$(readlink -e "$0")"):$PATH"
 
-while getopts "b:c:not" opt; do
+while getopts "b:c:ot" opt; do
     case $opt in
         b)
             # TODO check if number
@@ -12,23 +12,14 @@ while getopts "b:c:not" opt; do
         c )
             # each OPTARG for "c" is expected to be a valid string of find checks
             candidate_checks="${candidate_checks+$candidate_checks} $OPTARG";;
-        n )
-            declare -r MODE=n
-            echo "[INFO] Collecting candidates from files newer than last run" >&2;;
         o )
-            declare -r MODE=o
-            echo "[INFO] Collecting candidates from files older than last run" >&2;;
+            declare -r COLLECT_OLD_FILES=;;
         t )
             declare -r TEST_ONLY=
-            echo "[WARNING] Dry run! Will only collect candidates without syncing" >&2;;
+            echo "[WARNING] Dry run! Will only collect candidates without sync" >&2;;
 	esac
 done
 shift $(expr $OPTIND - 1 )
-
-if ! [[ -v MODE ]]; then
-    echo "[ERROR] No mode given: one of -n or -o required" >&2
-    exit 1
-fi
 
 if [[ -v candidate_checks ]]; then
     declare -r CANDIDATE_CHECKS=$candidate_checks
@@ -43,7 +34,7 @@ if [[ -z $SOURCE_DIRECTORY ]]; then
     exit 1 
 fi
 declare -r TARGET=${2:-}
-if ! [[ $TARGET =~ s3://[a-zA-Z0-9\./]/ ]]; then
+if ! [[ $TARGET =~ s3://[a-zA-Z0-9\./]+/ ]]; then
     echo "[ERROR] Target $TARGET is no valid s3 url" >&2
     exit 1
 fi
@@ -117,12 +108,12 @@ sync_files() (
 
 declare -r LAST_RUN_TIMESTAMP=$(get_last_run_ts_file)
 
-case $MODE in
-    o )
-        declare -r CANDIDATES=$(collect_older_candidates | sort);;
-    n )
-        declare -r CANDIDATES=$(collect_newer_candidates | sort);;
-esac 
+if [[ -v COLLECT_OLD_FILES ]]; then
+    echo "[INFO] Collecting candidates from before last run" >&2
+    declare -r CANDIDATES=$(collect_older_candidates | sort)
+else
+    declare -r CANDIDATES=$(collect_newer_candidates | sort)
+fi 
 
 if [[ -z $CANDIDATES ]]; then
     echo "[INFO] No candidates found for sync" >&2
@@ -145,9 +136,9 @@ fi
 synced_files=$(sync_files "$SOURCE_DIRECTORY" "$SYNC_CANDIDATES" "$TARGET")
 synced_count=$(wc -l <<<"$synced_files")
 
-# older mode should not touch LAST_RUN_TIMESTAMP: I have a fear that this might lead to newer files not picked up for
+# if we synced older files, we should not touch LAST_RUN_TIMESTAMP: I have a fear that this might lead to newer files not picked up for
 # syncing...
-if [[ $MODE = "n" ]]; then
+if ! [[ -v COLLECT_OLD_FILES ]]; then
     touch "$LAST_RUN_TIMESTAMP"    
 fi
 
