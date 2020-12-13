@@ -4,7 +4,7 @@ set -eu
 
 PATH="$(dirname "$(readlink -e "$0")"):$PATH"
 
-while getopts "b:c:ot" opt; do
+while getopts ":hb:c:ot" opt; do
     case $opt in
         b)
             # TODO check if number
@@ -17,6 +17,12 @@ while getopts "b:c:ot" opt; do
         t )
             declare -r TEST_ONLY=
             echo "[WARNING] Dry run! Will only collect candidates without sync" >&2;;
+        h )
+            echo "[USAGE] sync_dir [-b BATCHSIZE] -c CANDIDATE_CHECKS... [-o] [-t] SOURCEDIR S3TARGET" >&2
+            exit;;
+        ? ) 
+            echo "[ERROR] Unknown parameter \"$OPTARG\"" >&2
+            exit 1;;
 	esac
 done
 shift $(expr $OPTIND - 1 )
@@ -52,6 +58,7 @@ print_duration() {
 }
 
 collect_older_candidates() {
+    # TODO catch errors from s3cmd calls
     local -r synced_list=$(mktemp)
     s3cmd -r ls "$TARGET" |\
         sed -r 's|([0-9-]+ [0-9:]+)[[:space:]]+([0-9]+)[[:space:]]+'"$TARGET"'/(.+)|\3|' > "$synced_list"
@@ -92,9 +99,9 @@ sync_files() (
     #   and maybe wrongly detect "identical" files (identity based on md5 checksums). (this might also make things faster because 
     #   checksums must not be produced/fetched). From: https://stackoverflow.com/a/28188553/1295519
     local -r opts="--no-check-md5 --acl-private --no-progress --skip-existing --preserve --exclude '*'"
-    local s3cmd_out
+    local s3cmd_out s3cmd_rc
     s3cmd_out=$(s3cmd $opts --files-from - sync "$source_dir" "$target_url" <<<"$files_to_sync" 2>&1)
-    local -r s3cmd_rc=$?
+    s3cmd_rc=$?
 
     if ! [[ $s3cmd_rc = 0 ]]; then
         echo -e "[ERROR] s3cmd call failed with return code $s3cmd_rc:\n$s3cmd_out" >&2
