@@ -20,7 +20,7 @@ while getopts "b:c:not" opt; do
             echo "[INFO] Collecting candidates from files older than last run" >&2;;
         t )
             declare -r TEST_ONLY=
-            echo "[WARNING] Dry run" >&2;;
+            echo "[WARNING] Dry run! Will only collect candidates without syncing" >&2;;
 	esac
 done
 shift $(expr $OPTIND - 1 )
@@ -44,6 +44,7 @@ if [[ -z $SOURCE_DIRECTORY ]]; then
 fi
 declare -r TARGET=${2:-}
 if ! [[ $TARGET =~ s3://[a-zA-Z0-9\./] ]]; then
+    # FIXME balk on missing / at the end
     echo "[ERROR] Target $TARGET is no valid s3 url" >&2
     exit 1
 fi
@@ -89,6 +90,20 @@ get_last_run_ts_file()  {
     echo "$ts_file"
 }
 
+sync_files() {
+    local -r source_dir=$1
+    local -r files_to_sync=$2
+    local -r target_url=$3
+
+    # about "--exclude" - to restrict to only the files we pass via "--files-from", we must first exclude all
+    # about "--no-check-md5" - s3cmd will compare found files that are older than $INITIAL_SYNC_START_TSFILE with uploaded once
+    #   and maybe wrongly detect "identical" files (identity based on md5 checksums). (this might also make things faster because 
+    #   checksums must not be produced/fetched). From: https://stackoverflow.com/a/28188553/1295519
+    local -r opts="--no-check-md5 --acl-private --no-progress --skip-existing --preserve --exclude '*'"
+    s3cmd $opts -v --files-from - sync "$source_dir" "$target_url" <<<"$files_to_sync" 2>&1  |\
+        sed -r -n 's/^upload: \x27(.+)\x27 -> \x27s3:.+\x27.*/\1/p'
+}
+
 
 
 declare -r LAST_RUN_TIMESTAMP=$(get_last_run_ts_file)
@@ -110,21 +125,16 @@ if [[ -v BATCH_SIZE ]]; then
 else    
     declare -r SYNC_CANDIDATES=$CANDIDATES
 fi
+candidates_count=$(wc -l <<<"$SYNC_CANDIDATES")
 
 if [[ -v TEST_ONLY ]]; then
+    echo "[INFO] Found $candidates_count file(s)" >&2
     echo "$SYNC_CANDIDATES"
     exit
 fi
 
-# about "--exclude" - to restrict to only the files we pass via "--files-from", we must first exclude all
-# about "--no-check-md5" - s3cmd will compare found files that are older than $INITIAL_SYNC_START_TSFILE with uploaded once
-#   and maybe wrongly detect "identical" files (identity based on md5 checksums). 
-#   (this might also make things faster because checksums must not be produced/fetched)
-#   from: https://stackoverflow.com/a/28188553/1295519
-declare -r S3CMD_OPTS="--no-check-md5 --acl-private --no-progress --skip-existing --preserve --exclude '*'"
-# about "\x27" in sed pattern - placeholder for single quote
-synced_files=$(s3cmd $S3CMD_OPTS --files-from - sync "$SOURCE_DIRECTORY" "$TARGET" <<<"$SYNC_CANDIDATES" 2>&1 |\
-    sed -r -n 's/^upload: \x27(.+)\x27 -> \x27s3:.+\x27.*/\1/p')        
+synced_files=$(sync_files "$SOURCE_DIRECTORY" "$SYNC_CANDIDATES" "$TARGET")
+synced_count=$(wc -l <<<"$synced_files")
 
 # older mode should not touch LAST_RUN_TIMESTAMP: I have a fear that this might lead to newer files not picked up for
 # syncing...
@@ -132,18 +142,14 @@ if [[ $MODE = "n" ]]; then
     touch "$LAST_RUN_TIMESTAMP"    
 fi
 
-candidates_count=$(wc -l <<<"$SYNC_CANDIDATES")
-
 if [[ -z $synced_files ]]; then
-    echo "[WARN] No files were synced (but there were $candidates_count candidates)" >&2
+    echo "[WARN] No files were synced but candidates exist: $candidates_count" >&2
     exit 1
 fi
-
-synced_count=$(wc -l <<<"$synced_files")      
 
 if [[ $candidates_count != $synced_count ]]; then
     echo "[WARN] Found $candidates_count candidates but $synced_count were synced" >&2
 fi
 
-echo "$synced_files"
 echo "[INFO] Synced $synced_count file(s) in $(print_duration)" >&2
+echo "$synced_files"
