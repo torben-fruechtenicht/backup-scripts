@@ -1,6 +1,6 @@
 #! /usr/bin/env bash
 
-set -eu
+set -euo pipefail
 
 PATH="$(dirname "$(readlink -e "$0")"):$PATH"
 
@@ -58,10 +58,18 @@ print_duration() {
 }
 
 collect_older_candidates() {
-    # TODO catch errors from s3cmd calls
+    local s3cmd_out s3cmd_rc
+
+    s3cmd_out=$(s3cmd -r ls "$TARGET" 2>&1)
+    s3cmd_rc=$?
+
+    if ! [[ $s3cmd_rc = 0 ]]; then
+        echo -e "[ERROR] s3cmd ls call failed with return code $s3cmd_rc:\n$s3cmd_out" >&2
+        return 1
+    fi
+
     local -r synced_list=$(mktemp)
-    s3cmd -r ls "$TARGET" |\
-        sed -r 's|([0-9-]+ [0-9:]+)[[:space:]]+([0-9]+)[[:space:]]+'"$TARGET"'/(.+)|\3|' > "$synced_list"
+    sed -r 's|([0-9-]+ [0-9:]+)[[:space:]]+([0-9]+)[[:space:]]+'"$TARGET"'/(.+)|\3|' <<<"$s3cmd_out" > "$synced_list"
     find "$SOURCE_DIRECTORY" -type f ${CANDIDATE_CHECKS+$CANDIDATE_CHECKS} \
         ! -newer "$LAST_RUN_TIMESTAMP" -printf '%P\n' |\
         while read file; do
@@ -87,9 +95,7 @@ get_last_run_ts_file()  {
     echo "$ts_file"
 }
 
-sync_files() (
-    # we want to be able to capture all output from s3cmd so we won't miss errors, so run in subshell with "e" option turned off
-    set +e
+sync_files() {
     local -r source_dir=$1
     local -r files_to_sync=$2
     local -r target_url=$3
@@ -104,12 +110,12 @@ sync_files() (
     s3cmd_rc=$?
 
     if ! [[ $s3cmd_rc = 0 ]]; then
-        echo -e "[ERROR] s3cmd call failed with return code $s3cmd_rc:\n$s3cmd_out" >&2
-        exit 1
+        echo -e "[ERROR] s3cmd sync call failed with return code $s3cmd_rc:\n$s3cmd_out" >&2
+        return 1
     fi
 
     sed -r -n 's/^upload: \x27(.+)\x27 -> \x27s3:.+\x27.*/\1/p' <<<"$s3cmd_out"
-)
+}
 
 
 
