@@ -1,16 +1,21 @@
 #! /usr/bin/env bash
 
-set -eu
+set -euo pipefail
 
-declare -r APPDATA_DIR=$(readlink -e "$HOME/.local/share/backup-scripts")
-if [[ -z $APPDATA_DIR ]]; then
-    echo "[WARNING] App data directory $HOME/.local/share/backup-scripts does not exist, creating it" >&2
-    mkdir --parents "$HOME/.local/share/backup-scripts"
+declare -r TIMESTAMP_NAME=$1
+if [[ -z $TIMESTAMP_NAME ]]; then
+    echo "[ERROR] No timestamp name given" >&2
+    exit 1
 fi
 
-declare -r LAST_RUN_TIMESTAMP=$(readlink -f "$APPDATA_DIR/last_run_ts")
+declare -r APPDATA_DIR=$(readlink -a "$HOME/.local/share/backup-scripts")
+if ! [[ -e $APPDATA_DIR ]]; then
+    echo "[WARN] App data directory $APPDATA_DIR does not exist, creating it" >&2
+    mkdir --parents "$APPDATA_DIR"
+fi
+
+declare -r LAST_RUN_TIMESTAMP=$(readlink -f "$APPDATA_DIR/$TIMESTAMP_NAME-last_run_ts")
 if ! [[ -e $LAST_RUN_TIMESTAMP ]]; then
-    echo "[INFO] Last run timestamp file $LAST_RUN_TIMESTAMP does not exist, creating it" >&2
     touch "$LAST_RUN_TIMESTAMP"
 fi
 
