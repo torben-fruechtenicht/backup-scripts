@@ -1,0 +1,67 @@
+#! /usr/bin/env bash
+
+set -euo pipefail
+
+PATH="$(dirname "$(readlink -e "$0")"):$PATH"
+
+
+print_duration() {
+    local mins secs
+    ((mins=${SECONDS}/60))
+    ((secs=${SECONDS}%60))
+    if [[ $mins != 0 ]]; then
+        echo "$mins minutes $secs seconds"
+    else 
+        echo "$secs seconds"
+    fi
+}
+
+
+declare -r SOURCE_DIRECTORY="$(readlink -e "${1:-}")"
+if [[ -z $SOURCE_DIRECTORY ]]; then
+    echo "[ERROR] No source directory ${1:-}" >&2
+    exit 1 
+fi
+
+declare -r TARGET=${2:-}
+if ! [[ $TARGET =~ s3://[a-zA-Z0-9\./]+/ ]]; then
+    echo "[ERROR] Target $TARGET is no valid s3 url" >&2
+    exit 1
+fi
+
+
+candidates=$(</dev/stdin)
+if [[ -z $candidates ]]; then
+    echo "[INFO] No candidates for syncing" >&2
+    exit
+fi
+candidates_count=$(wc -l <<<"$candidates")
+
+# about "--no-check-md5" - s3cmd will compare found files that are older than $INITIAL_SYNC_START_TSFILE with uploaded once
+#   and maybe wrongly detect "identical" files (identity based on md5 checksums). (this might also make things faster because 
+#   checksums must not be produced/fetched). From: https://stackoverflow.com/a/28188553/1295519
+s3cmd_out=$(s3cmd --no-check-md5 --acl-private --no-progress --skip-existing --preserve \
+    --files-from - sync "$SOURCE_DIRECTORY" "$TARGET" 2>&1) <<<$candidates
+s3cmd_rc=$?
+if ! [[ $s3cmd_rc = 0 ]]; then
+    echo -e "[ERROR] s3cmd sync call failed with return code $s3cmd_rc:\n$s3cmd_out" >&2
+    exit 1
+fi
+
+synced_files=$(sed -r -n 's/^upload: \x27(.+)\x27 -> \x27s3:.+\x27.*/\1/p' <<<"$s3cmd_out")
+synced_count=$(wc -l <<<"$synced_files")
+
+if [[ -z $synced_files ]]; then
+    echo "[WARN] No files were synced but candidates exist: $candidates_count" >&2
+    exit 1
+fi
+
+echo "[INFO] Synced $synced_count file(s) in $(print_duration)" >&2
+
+if [[ $candidates_count != $synced_count ]]; then
+    echo "[WARN] Found $candidates_count candidates but only $synced_count were synced" >&2
+    echo -e "[WARN] Candidates:\n$candidates" >&2
+    echo "[WARN] Synced:" >&2
+fi
+
+echo "$synced_files"

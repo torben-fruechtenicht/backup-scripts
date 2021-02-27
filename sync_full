@@ -1,0 +1,43 @@
+#! /usr/bin/env bash
+
+set -euo pipefail
+
+PATH="$(dirname "$(readlink -e "$0")"):$PATH"
+
+while getopts "b:d" opt; do
+    case $opt in
+        b )
+            # TODO check if number
+            declare -r BATCH_SIZE=$OPTARG;;
+        d ) 
+            declare -r DRY_RUN=$=OPTARG;;
+	esac
+done
+shift $(expr $OPTIND - 1 )
+
+declare -r SOURCE_DIR=$1
+declare -r INCLUDE_PATTERN=$2
+declare -r S3_TARGET_URL=$3
+
+synced_list=$(s3cmd -r ls "$S3_TARGET_URL" |\
+    sed -r 's|([0-9-]+ [0-9:]+)[[:space:]]+([0-9]+)[[:space:]]+'"$S3_TARGET_URL"'/(.+)|\3|')
+
+files=$(\
+    find "$SOURCE_DIR" -type f $INCLUDE_PATTERN -printf '%P\n' |\
+    while read candidate; do
+        grep -q "$candidate" <<<"$synced_list" || echo "$candidate"
+    done | sort
+)
+
+if [[ -v BATCH_SIZE ]] && [[ -n $files ]]; then
+    echo "[INFO] Selecting batch of $BATCH_SIZE, full candidates count is $(wc -l <<<"$files")"
+    files=$(head -n "$BATCH_SIZE" <<<"$files")
+fi
+
+if [[ -v DRY_RUN ]]; then
+    echo "[INFO] Found $(wc -l <<<"$files") files to sync" >&2
+    echo "$files"
+    exit
+fi
+
+sync_files "$SOURCE_DIR" "$S3_TARGET_URL" <<<"$files"
