@@ -1,0 +1,31 @@
+#! /usr/bin/env bash
+
+set -euo pipefail
+
+PATH="$(dirname "$(readlink -e "$0")"):$PATH"
+
+while getopts "d" opt; do
+    case $opt in
+        d ) 
+            declare -r DRY_RUN=$=OPTARG;;
+	esac
+done
+shift $(expr $OPTIND - 1 )
+
+declare -r SOURCE_DIR=$1
+declare -r INCLUDE_PATTERN=$2
+declare -r TIMESTAMP_NAME=$3
+declare -r S3_TARGET_URL=$4
+
+last_run_timestamp=$(last_run_timestamp.sh "$TIMESTAMP_NAME")
+
+files=$(find "$SOURCE_DIR" -type f $INCLUDE_PATTERN -newer "$last_run_timestamp" -printf '%P\n' | sort)
+
+if [[ -v DRY_RUN ]]; then
+    echo "[INFO] Found $(wc -l <<<"$files") new files to sync" >&2
+    echo "$files"
+    exit
+fi
+
+sync_files $PASSTHROUGH_PARAMS "$SOURCE_DIR" "$S3_TARGET_URL"  <<<"$files"
+touch $last_run_timestamp
