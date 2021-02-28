@@ -19,8 +19,12 @@ declare -r SOURCE_DIR=$1
 declare -r INCLUDE_PATTERN=$2
 declare -r S3_TARGET_URL=$3
 
+# TODO TBD checking each file individually if it has been synced already takes time... therefore, why not take both lists
+# (i.e. synced and all local files) and run them through diff to get the list of unsynced files?
+# diff call to get the unsynced files: diff --new-line-format="%L" synced.txt all.txt (--new-line-format param results in list with no leading "> ")
+
 synced_list=$(s3cmd -r ls "$S3_TARGET_URL" |\
-    sed -r 's|([0-9-]+ [0-9:]+)[[:space:]]+([0-9]+)[[:space:]]+'"$S3_TARGET_URL"'/(.+)|\3|')
+    sed -r 's|[0-9-]+[[:space:]]+[0-9:]+[[:space:]]+[0-9]+[[:space:]]+'"$S3_TARGET_URL"'/(.+)|\1|')
 
 files=$(\
     find "$SOURCE_DIR" -type f $INCLUDE_PATTERN -printf '%P\n' |\
