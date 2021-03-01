@@ -56,6 +56,8 @@ if [[ -z $synced_files ]]; then
     exit 1
 fi
 
+echo "$synced_files"
+
 echo "[INFO] Synced $synced_count file(s) in $(print_duration)" >&2
 
 if [[ $candidates_count != $synced_count ]]; then
@@ -64,4 +66,3 @@ if [[ $candidates_count != $synced_count ]]; then
     echo "[WARN] Synced:" >&2
 fi
 
-echo "$synced_files"
