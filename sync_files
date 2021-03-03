@@ -16,18 +16,43 @@ print_duration() {
     fi
 }
 
+function s3_sync() (
+    local -r target_url=$1
+    local -r files_to_sync=$2
 
-declare -r SOURCE_DIRECTORY="$(readlink -e "${1:-}")"
-if [[ -z $SOURCE_DIRECTORY ]]; then
-    echo "[ERROR] No source directory ${1:-}" >&2
-    exit 1 
-fi
+    local s3cmd_out s3cmd_rc
+    set +e
 
-declare -r TARGET=${2:-}
-if ! [[ $TARGET =~ s3://[a-zA-Z0-9\./]+/ ]]; then
-    echo "[ERROR] Target $TARGET is no valid s3 url" >&2
+    # about "--no-check-md5" - s3cmd will compare found files that are older than $INITIAL_SYNC_START_TSFILE with uploaded once
+    #   and maybe wrongly detect "identical" files (identity based on md5 checksums). (this might also make things faster because 
+    #   checksums must not be produced/fetched). From: https://stackoverflow.com/a/28188553/1295519
+    s3cmd_out=$(s3cmd --no-check-md5 --acl-private --no-progress --skip-existing --preserve \
+        --files-from - sync "$source_dir" "$target_url" 2>&1) <<<"$files_to_sync"
+    s3cmd_rc=$?
+    if [[ $s3cmd_rc != 0 ]]; then
+        echo -e "[ERROR] s3cmd sync call failed with return code $s3cmd_rc:\n$s3cmd_out" >&2
+        return 1
+    fi    
+
+    echo "$s3cmd_out"
+)
+
+
+source_dir=${1:-}
+if [[ -z $(readlink -e "$source_dir") ]]; then
+    echo "[ERROR] No source directory${source_dir:+ :$source_dir}" >&2
     exit 1
-fi
+elif [[ ${source_dir:-1} != "/" ]]; then
+    source_dir="$source_dir/"
+fi 
+
+s3_target_url=${2:-}
+if ! [[ $s3_target_url =~ s3://[a-zA-Z0-9\./]+ ]]; then
+    echo "[ERROR] No valid S3 target url${s3_target_url:+ s3_target_url}" >&2
+    exit 1
+elif [[ ${s3_target_url:-1} != "/" ]]; then
+    s3_target_url="$s3_target_url/"
+fi 
 
 
 candidates=$(</dev/stdin)
@@ -35,34 +60,23 @@ if [[ -z $candidates ]]; then
     echo "[INFO] No candidates for syncing" >&2
     exit
 fi
+
+# \x27 is single quote
+synced_files=$(s3_sync "$s3_target_url" "$candidates" | sed -r -n 's/^upload: \x27(.+)\x27 -> \x27s3:.+\x27.*/\1/p')
+synced_count=$(wc -l <<<"$synced_files")
 candidates_count=$(wc -l <<<"$candidates")
 
-# about "--no-check-md5" - s3cmd will compare found files that are older than $INITIAL_SYNC_START_TSFILE with uploaded once
-#   and maybe wrongly detect "identical" files (identity based on md5 checksums). (this might also make things faster because 
-#   checksums must not be produced/fetched). From: https://stackoverflow.com/a/28188553/1295519
-s3cmd_out=$(s3cmd --no-check-md5 --acl-private --no-progress --skip-existing --preserve \
-    --files-from - sync "$SOURCE_DIRECTORY" "$TARGET" 2>&1) <<<$candidates
-s3cmd_rc=$?
-if ! [[ $s3cmd_rc = 0 ]]; then
-    echo -e "[ERROR] s3cmd sync call failed with return code $s3cmd_rc:\n$s3cmd_out" >&2
-    exit 1
-fi
 
-synced_files=$(sed -r -n 's/^upload: \x27(.+)\x27 -> \x27s3:.+\x27.*/\1/p' <<<"$s3cmd_out")
-synced_count=$(wc -l <<<"$synced_files")
-
-if [[ -z $synced_files ]]; then
-    echo "[WARN] No files were synced but candidates exist: $candidates_count" >&2
+if [[ $candidates_count != $synced_count ]]; then
+    echo "[WARN] Only $synced_count files were synced but $candidates_count candidates have been received" >&2
+    # extra linebreak to separate the candidates from the synced files
+    echo -e "$candidates\n" >&2
+elif [[ -z $synced_files ]]; then
+    echo "[ERROR] No files were synced but $candidates_count candidates have been received" >&2
+    echo "$candidates" >&2
     exit 1
 fi
 
 echo "$synced_files"
 
 echo "[INFO] Synced $synced_count file(s) in $(print_duration)" >&2
-
-if [[ $candidates_count != $synced_count ]]; then
-    echo "[WARN] Found $candidates_count candidates but only $synced_count were synced" >&2
-    echo -e "[WARN] Candidates:\n$candidates" >&2
-    echo "[WARN] Synced:" >&2
-fi
-
