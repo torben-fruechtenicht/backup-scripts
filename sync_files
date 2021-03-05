@@ -42,7 +42,7 @@ source_dir=${1:-}
 if [[ -z $(readlink -e "$source_dir") ]]; then
     echo "[ERROR] No source directory${source_dir:+ :$source_dir}" >&2
     exit 1
-elif [[ ${source_dir:-1} != "/" ]]; then
+elif [[ ${source_dir: -1} != "/" ]]; then
     source_dir="$source_dir/"
 fi 
 
@@ -50,7 +50,7 @@ s3_target_url=${2:-}
 if ! [[ $s3_target_url =~ s3://[a-zA-Z0-9\./]+ ]]; then
     echo "[ERROR] No valid S3 target url${s3_target_url:+ s3_target_url}" >&2
     exit 1
-elif [[ ${s3_target_url:-1} != "/" ]]; then
+elif [[ ${s3_target_url: -1} != "/" ]]; then
     s3_target_url="$s3_target_url/"
 fi 
 

@@ -6,7 +6,12 @@ PATH="$(dirname "$(readlink -e "$0")"):$PATH"
 
 
 function fetch_list_of_synced() {
-    local -r s3_url=$1
+    local s3_url=$1
+    # NB there needs to be a / in the pattern for parsing the s3cmd ls output, we can just add it to 
+    # the s3 url if there is none 
+    if [[ ${s3_url: -1} != "/" ]]; then
+        s3_url="$s3_url/"
+    fi
     s3cmd -r ls "$s3_url" |\
         sed -r 's|[0-9-]+[[:space:]]+[0-9:]+[[:space:]]+[0-9]+[[:space:]]+'"$s3_url"'(.+)|\1|' |\
         sort
@@ -25,7 +30,7 @@ while getopts "b:d" opt; do
             # TODO check if number
             declare -r BATCH_SIZE=$OPTARG;;
         d ) 
-            declare -r DRY_RUN=$=OPTARG;;
+            declare -r DRY_RUN=;;
 	esac
 done
 shift $(expr $OPTIND - 1 )
@@ -50,11 +55,12 @@ if [[ -z $s3_target_url ]]; then
 fi
 
 
-# --new-line-format="%L" will only output the line content, no ">" suffixes
-# the diff call needs the extra "|| true" because it will return 1 if there are differences
-candidates=$(diff --new-line-format='%L' --unchanged-line-format='  %L' --old-line-format= \
-    <(fetch_list_of_synced "$s3_target_url") \
-    <(list_all_local_files "$source_dir" "$include_tests") || true)
+# NB --old-line-format="%L" will only output the line content, no ">" suffixes
+# NB wrapping the diff call in an echo call will help with handling the return code from diff:
+#   if there are differences, diff will always return 1 but we just want its output
+candidates=$(echo "$(diff --new-line-format= --unchanged-line-format= --old-line-format="%L" \
+        <(list_all_local_files "$source_dir" "$include_tests") \
+        <(fetch_list_of_synced "$s3_target_url"))")
 
 if [[ -v BATCH_SIZE ]] && [[ -n $candidates ]]; then
     echo "[INFO] Selecting batch of $BATCH_SIZE, full candidates count is $(wc -l <<<"$candidates")"
