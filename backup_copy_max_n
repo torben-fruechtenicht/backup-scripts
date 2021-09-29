@@ -1,0 +1,20 @@
+#! /usr/bin/env bash
+
+set -eu
+
+file=$(readlink -e "$1")
+if [[ -z "$file" ]]; then
+    echo "File does not exist" >&2
+    exit 1
+fi
+
+max_backup_count=$2
+
+filename=$(basename "$file")
+dir=$(dirname "$file")
+backup_file="$filename-$(date +"%Y%m%dT%H%M%S").bak"
+cp "$file" "$dir/$backup_file"
+
+for backup_file in "$dir"/$filename-*.bak; do 
+    echo "$backup_file"
+done | sort -r | tail -n +$(( $max_backup_count + 1 )) | xargs --no-run-if-empty rm
