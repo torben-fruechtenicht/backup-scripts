@@ -1,0 +1,13 @@
+#!/bin/bash
+
+set -eu
+
+database=$1
+target_url=$2
+
+backup_filename="${database}_$(date +%Y%m%d-%H%M).dump.gz"
+backup_file="/tmp/$backup_filename"
+# N.B. password will be passed using ~/.pgpass, see http://www.postgresql.org/docs/current/static/libpq-pgpass.html
+pg_dump -U postgres -h localhost -p 5432 "$database" | gzip > "$backup_file"
+s3cmd --acl-private --no-progress --preserve put "$backup_file" "$target_url/$backup_filename"
+rm -f "$backup_file"
