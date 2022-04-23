@@ -1,0 +1,14 @@
+#! /usr/bin/env bash
+
+set -eux
+
+svn_repo_dir=$1
+target_url=${2%/}
+
+backup_name=${svn_repo_dir##*/}
+backup_filename="${backup_name}_$(date +%Y%m%d_%H%M).dump.gz"
+backup_file="/tmp/$backup_filename"
+
+svnadmin dump -q "$svn_repo_dir" | gzip > "$backup_file"
+s3cmd --acl-private --no-progress --preserve put "$backup_file" "$target_url/$backup_filename"
+rm -f "$backup_file"
