@@ -1,9 +1,9 @@
 #! /usr/bin/env bash
 
-set -eux
+set -eu
 
 svn_repo_dir=$1
-target_url=${2%/}
+target_url=${2%/} 
 
 backup_name=${svn_repo_dir##*/}
 backup_filename="${backup_name}_$(date +%Y%m%d_%H%M).dump.gz"
