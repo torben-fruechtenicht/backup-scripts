@@ -6,6 +6,7 @@
 set -eu
 
 database=$1
+# TODO it should be possible to pass the user with a parameter (and fall back to same name as database if no user was given)
 user=$database
 target_url=${2%/}
 
